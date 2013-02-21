@@ -19,6 +19,7 @@ class Mega(object):
         self.sid = None
         self.sequence_num = random.randint(0, 0xFFFFFFFF)
         self.request_id = make_id(10)
+        self.sn = None
 
     @classmethod
     def login(class_, email, password):
@@ -84,12 +85,42 @@ class Mega(object):
         if isinstance(json_resp, int):
             raise RequestError(json_resp)
         return json_resp[0]
+    
+    def server_endpoint_request(self, sn=None, ssl=False):
+        params = {}
+        if self.sid:
+            params.update({'sid': self.sid})
+        if sn:
+            self.sn = sn
+        
+        if not self.sn:
+            files = self.api_request({'a': 'f', 'c': 1})
+            self.sn = files['sn']
+        params['sn'] = self.sn
+        
+        if ssl:
+            params['ssl'] = 1
+            
+        req = requests.post(
+            '{0}://g.api.{1}/sc'.format(self.schema, self.domain),
+                                        params=params,
+                                        timeout=self.timeout)
+        json_resp = json.loads(req.text)
+
+        #if numeric error code response
+        if isinstance(json_resp, int):
+            raise RequestError(json_resp)
+        
+        return json_resp
+
 
     def get_files(self):
         '''
         Get all files in account
         '''
         files = self.api_request({'a': 'f', 'c': 1})
+        self.sn = files['sn']
+        
         files_dict = {}
         for file in files['f']:
             processed_file = self.process_file(file)
@@ -288,6 +319,39 @@ class Mega(object):
         # check mac integrity
         if (file_mac[0] ^ file_mac[1], file_mac[2] ^ file_mac[3]) != meta_mac:
             raise ValueError('Mismatched mac')
+
+
+    def create_folder(self, folder_name, dest=None):
+        #determine storage node
+        if dest is None:
+            #if none set, upload to cloud drive node
+            if hasattr(self, 'root_id'):
+                root_id = getattr(self, 'root_id')
+            else:
+                self.get_files()
+            dest = self.root_id
+        
+        #generate random aes key (128) for file
+        ul_key = [random.randint(0, 0xFFFFFFFF) for r in range(6)]
+        file_mac = [0, 0, 0, 0]
+        file_mac = aes_cbc_encrypt_a32(file_mac, ul_key[:4])
+        
+        meta_mac = (file_mac[0] ^ file_mac[1], file_mac[2] ^ file_mac[3])
+        
+        attribs = {'n': os.path.basename(folder_name)}
+        encrypt_attribs = base64_url_encode(encrypt_attr(attribs, ul_key[:4]))
+        key = [ul_key[0] ^ ul_key[4], ul_key[1] ^ ul_key[5],
+               ul_key[2] ^ meta_mac[0], ul_key[3] ^ meta_mac[1],
+               ul_key[4], ul_key[5], meta_mac[0], meta_mac[1]]
+        encrypted_key = a32_to_base64(encrypt_key(key, self.master_key))
+        #update attributes
+        data = self.api_request({'a': 'p', 't': dest, 'n': [{
+                                'h': 'xxxxxxxx',
+                                't': 1,
+                                'a': encrypt_attribs,
+                                'k': encrypted_key}]})
+        #close input file and return API msg
+        return data
 
     def upload(self, filename, dest=None):
         #determine storage node
