@@ -325,32 +325,23 @@ class Mega(object):
         #determine storage node
         if dest is None:
             #if none set, upload to cloud drive node
-            if hasattr(self, 'root_id'):
-                root_id = getattr(self, 'root_id')
-            else:
+            if not hasattr(self, 'root_id'):
                 self.get_files()
             dest = self.root_id
         
-        #generate random aes key (128) for file
-        ul_key = [random.randint(0, 0xFFFFFFFF) for r in range(6)]
-        file_mac = [0, 0, 0, 0]
-        file_mac = aes_cbc_encrypt_a32(file_mac, ul_key[:4])
+        #random folder key
+        ul_key = [random.randint(0, 0xFFFFFFFF) for _ in range(4)]
+        attribs = {'n': folder_name}
+        encrypt_attribs = base64_url_encode(encrypt_attr(attribs, ul_key))
+        encrypted_key = a32_to_base64(encrypt_key(ul_key, self.master_key))
         
-        meta_mac = (file_mac[0] ^ file_mac[1], file_mac[2] ^ file_mac[3])
-        
-        attribs = {'n': os.path.basename(folder_name)}
-        encrypt_attribs = base64_url_encode(encrypt_attr(attribs, ul_key[:4]))
-        key = [ul_key[0] ^ ul_key[4], ul_key[1] ^ ul_key[5],
-               ul_key[2] ^ meta_mac[0], ul_key[3] ^ meta_mac[1],
-               ul_key[4], ul_key[5], meta_mac[0], meta_mac[1]]
-        encrypted_key = a32_to_base64(encrypt_key(key, self.master_key))
-        #update attributes
+        #create folder
         data = self.api_request({'a': 'p', 't': dest, 'n': [{
                                 'h': 'xxxxxxxx',
                                 't': 1,
                                 'a': encrypt_attribs,
                                 'k': encrypted_key}]})
-        #close input file and return API msg
+
         return data
 
     def upload(self, filename, dest=None):
